@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "winrm": {
+      "command": "C:\\tools\\winrm-mcp\\.venv\\Scripts\\winrm-mcp.exe",
+      "env": {
+        "WINRM_MCP_CONFIG": "C:\\tools\\winrm-mcp\\config.yaml",
+        "WINRM_PASSWORD": "replace-with-guest-admin-password"
+      }
+    }
+  }
+}

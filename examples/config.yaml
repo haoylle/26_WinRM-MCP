@@ -1,0 +1,35 @@
+# Copy this file to config.yaml and edit it.
+# Set WINRM_MCP_CONFIG to the full path of your config.yaml.
+
+guest:
+  host: "192.168.122.50"
+  username: "Administrator"
+  # Prefer WINRM_PASSWORD env var. password here is supported but not recommended.
+  password: null
+  transport: "ntlm"       # ntlm, kerberos, credssp, basic, certificate
+  scheme: "http"          # use https for non-lab networks
+  port: 5985               # 5986 for https
+  server_cert_validation: "ignore" # validate|ignore; used for https
+  operation_timeout_sec: 60
+  read_timeout_sec: 90
+  allow_unencrypted: true  # lab-only. Use https in real environments.
+  path: "/wsman"
+
+limits:
+  max_stdout_chars: 200000
+  copy_chunk_bytes: 49152
+  command_timeout_sec: 300
+
+security:
+  # Empty allowlist means allow all commands. For shared environments, add prefixes.
+  allowed_command_prefixes: []
+  denied_patterns:
+    - "format c:"
+    - "cipher /w"
+
+kdnet:
+  host_ip: "192.168.122.1"
+  port: 50000
+  key: "1.2.3.4"
+  state_file: "C:\\mcp-state\\kd-session.json"
+  bcdedit_path: "bcdedit.exe"
