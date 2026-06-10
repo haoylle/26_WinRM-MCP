@@ -37,7 +37,7 @@ class GuestConfig(BaseModel):
 
 class LimitsConfig(BaseModel):
     max_stdout_chars: int = 200000
-    copy_chunk_bytes: int = 2048
+    copy_chunk_bytes: int = 8192
     command_timeout_sec: int = 300
 
 
@@ -208,7 +208,7 @@ def session_run(shell_id: str, command: str, shell: str = "powershell") -> dict[
         res["cwd"] = st.cwd
         return res
     if shell.lower() == "cmd":
-        safe_cwd = st.cwd.replace('\\"', '')
+        safe_cwd = st.cwd.replace('"', '')
         res = run_cmd(f'cd /d "{safe_cwd}" && {command} && cd')
         lines = res.get("stdout", "").splitlines()
         if lines:
@@ -253,7 +253,6 @@ def copy_to_guest(local_path: str, remote_path: str, overwrite: bool = True, ver
     total = src.stat().st_size
     remote_parent = str(PureWindowsPath(remote_path).parent)
 
-    # prepare: mkdir + remove existing
     init = (
         f"New-Item -ItemType Directory -Force -Path {_ps_quote(remote_parent)} | Out-Null; "
         f"Remove-Item -LiteralPath {_ps_quote(remote_path)} -Force -ErrorAction SilentlyContinue; "
@@ -272,11 +271,8 @@ def copy_to_guest(local_path: str, remote_path: str, overwrite: bool = True, ver
             b64 = base64.b64encode(data).decode("ascii")
             ps = (
                 f"$b=[Convert]::FromBase64String({_ps_quote(b64)}); "
-                f"$retries=5; $ok=$false; while($retries-- -gt 0 -and -not $ok){{"
-                f"try{{$fs=[IO.File]::Open({_ps_quote(remote_path)},[IO.FileMode]::Append,[IO.FileAccess]::Write,[IO.FileShare]::Read); "
-                f"$fs.Write($b,0,$b.Length); $fs.Close(); $ok=$true}}"
-                f"catch{{Start-Sleep -Milliseconds 300}}}}"
-                f"; if(-not $ok){{throw 'chunk write failed after retries'}}"
+                f"$fs=[IO.File]::Open({_ps_quote(remote_path)},[IO.FileMode]::Append,[IO.FileAccess]::Write,[IO.FileShare]::Read); "
+                f"try{{$fs.Write($b,0,$b.Length)}}finally{{$fs.Close()}}"
             )
             rr = _run_ps_raw(ps)
             if not rr["ok"]:
@@ -301,7 +297,7 @@ def copy_to_guest(local_path: str, remote_path: str, overwrite: bool = True, ver
 @mcp.tool()
 def test_file_copy() -> dict[str, Any]:
     """Smoke-test copy_to_guest: write a 32 KB temp file, copy to guest, verify SHA256, then clean up."""
-    data = bytes(range(256)) * 128  # 32 KB with known pattern
+    data = bytes(range(256)) * 128
     with tempfile.NamedTemporaryFile(delete=False, suffix=".bin") as tf:
         tf.write(data)
         tmp_local = tf.name
