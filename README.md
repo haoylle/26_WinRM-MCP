@@ -4,14 +4,6 @@
 
 이 서버는 Codex 또는 MCP Client에서 호출되며, 게스트 VM에 파일을 복사하거나, PowerShell/CMD 명령을 실행하거나, 분석 대상 프로그램을 실행하고, KDNET 커널 디버깅 준비 작업을 자동화하는 데 사용됩니다.
 
-## Repository Description
-
-영문 Description으로는 다음 문구를 사용하는 것을 권장합니다.
-
-```text
-MCP server for controlling Windows guest VMs over WinRM, including file copy, command execution, process launch, and KDNET setup for kernel debugging workflows.
-```
-
 ## Features
 
 이 프로젝트는 다음 기능을 제공합니다.
