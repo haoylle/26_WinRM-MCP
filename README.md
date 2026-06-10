@@ -1,213 +1,117 @@
 # winrm-mcp
 
 `winrm-mcp` is an MCP server for controlling a Windows guest VM from a Windows host over WinRM.
-It is designed to pair with a separate [`kd-mcp`](../kd-mcp) server for Windows kernel-debugging workflows.
+It is designed to work alongside a separate `kd-mcp` server for KDNET kernel-debugging workflows.
 
 ## Features
 
 - Run PowerShell commands on the guest.
-- Run `cmd.exe` commands on the guest.
+- Run cmd.exe commands on the guest.
 - Copy files from host to guest.
 - Copy files from guest to host.
+- SHA256 verification after file copy.
+- Built-in `test_file_copy()` validation tool.
 - Start executables or scripts inside the guest.
-- Maintain lightweight logical shell sessions with current-directory state.
+- Maintain lightweight shell sessions with working-directory state.
 - Reboot the guest.
-- Query guest boot debug settings.
-- Configure KDNET boot debugging with `bcdedit`.
-- Write a shared KD session state file that `kd-mcp` can read.
-- Optional command allowlist/denylist policy.
+- Configure KDNET and generate a shared state file for `kd-mcp`.
 
-## How it works with kd-mcp
-
-`winrm-mcp` and `kd-mcp` are intentionally separate MCP servers.
-They do **not** communicate over the network with each other. Instead, they coordinate through a shared state file.
-
-Typical flow:
-
-```text
-1. winrm-mcp: configure_kdnet
-   - runs bcdedit inside the guest
-   - writes C:\mcp-state\kd-session.json on the host
-
-2. winrm-mcp: reboot
-   - reboots the guest so debug boot settings take effect
-
-3. kd-mcp: start_from_state
-   - reads C:\mcp-state\kd-session.json
-   - starts kd.exe on the host with the same port/key
-
-4. kd-mcp: kd_command
-   - runs commands such as lm, k, !analyze -v
-```
-
-Both repos must use the same `state_file`, `port`, and `key` values.
-
-## Requirements
+## Host / Guest Layout
 
 Host:
 
-- Windows 10/11 or Windows Server.
-- Python 3.10+.
-- Network access to the guest VM's WinRM endpoint.
+- Codex / MCP Client
+- winrm-mcp
+- kd-mcp
+- WinDbg / kd.exe
 
 Guest:
 
-- Windows guest OS.
-- WinRM enabled.
-- Administrator credentials.
-- Firewall allows WinRM from the host.
+- Windows VM
+- WinRM Service
+- Analysis target
+- KDNET target configuration
 
-For KDNET setup, the guest must support Windows network kernel debugging and the selected host IP must be reachable from the guest.
+## File Copy Behavior
 
-## Enable WinRM on the guest
+`copy_to_guest()` transfers files using Base64 chunks over WinRM.
 
-Run inside the guest as Administrator:
+Server defaults:
+
+```yaml
+limits:
+  copy_chunk_bytes: 8192
+```
+
+Example configuration:
+
+```yaml
+limits:
+  max_stdout_chars: 200000
+  copy_chunk_bytes: 2048
+  command_timeout_sec: 300
+```
+
+The value from `config.yaml` overrides the server default.
+
+After transfer, SHA256 hashes are compared when `verify_hash=true`.
+
+Example result:
+
+```json
+{
+  "ok": true,
+  "hash_ok": true
+}
+```
+
+## Copy Validation
+
+Use:
+
+```text
+test_file_copy()
+```
+
+This creates a temporary 32 KB file, copies it to the guest, verifies SHA256, and removes the test file.
+
+Expected result:
+
+```json
+{
+  "ok": true,
+  "hash_ok": true
+}
+```
+
+## KDNET Workflow
+
+```text
+1. configure_kdnet
+2. reboot
+3. kd-mcp start_from_state
+4. kd_command
+```
+
+Both repositories must use the same state file, host IP, port, and key.
+
+## WinRM Setup
+
+Run inside the guest:
 
 ```powershell
 Enable-PSRemoting -Force
-Set-Item WSMan:\localhost\Service\AllowUnencrypted $true
-Set-Item WSMan:\localhost\Service\Auth\Basic $true
 ```
 
-For safer non-lab usage, configure WinRM over HTTPS instead of using unencrypted HTTP.
-
-## Install
-
-```powershell
-git clone https://github.com/<you>/winrm-mcp.git
-cd winrm-mcp
-.\scripts\install.ps1
-```
-
-Edit `config.yaml` after installation.
-
-Set the password through an environment variable rather than storing it in YAML:
-
-```powershell
-$env:WINRM_PASSWORD = "guest-admin-password"
-$env:WINRM_MCP_CONFIG = "$PWD\config.yaml"
-```
-
-## MCP client configuration
-
-Example:
-
-```json
-{
-  "mcpServers": {
-    "winrm": {
-      "command": "C:\\tools\\winrm-mcp\\.venv\\Scripts\\winrm-mcp.exe",
-      "env": {
-        "WINRM_MCP_CONFIG": "C:\\tools\\winrm-mcp\\config.yaml",
-        "WINRM_PASSWORD": "replace-with-guest-admin-password"
-      }
-    }
-  }
-}
-```
-
-## Tools
-
-### `health_check`
-
-Checks config loading and WinRM connectivity.
-
-### `run_ps(script)`
-
-Runs a PowerShell script on the guest.
-
-Example:
-
-```powershell
-Get-ComputerInfo | Select-Object WindowsProductName, WindowsVersion
-```
-
-### `run_cmd(command)`
-
-Runs a `cmd.exe /c` command on the guest.
-
-Example:
-
-```cmd
-whoami && hostname
-```
-
-### `open_shell(cwd)` / `session_run(shell_id, command, shell)` / `close_shell(shell_id)`
-
-Provides a lightweight logical shell session that preserves current directory between calls.
-This is not a raw interactive terminal; it is safer and better suited to MCP request/response execution.
-
-### `copy_to_guest(local_path, remote_path, overwrite)`
-
-Copies a host file to the guest using base64 chunks over WinRM.
-
-### `copy_from_guest(remote_path, local_path, overwrite)`
-
-Copies a guest file to the host using base64 chunks over WinRM.
-
-### `start_process(file_path, arguments, wait, cwd)`
-
-Starts an executable or script on the guest.
-
-### `reboot(force)`
-
-Reboots the guest.
-
-### `query_debug_settings()`
-
-Runs `bcdedit /enum {current}` and `bcdedit /dbgsettings` on the guest.
-
-### `configure_kdnet(host_ip, port, key, write_state)`
-
-Configures KDNET boot debugging on the guest:
-
-```cmd
-bcdedit /debug on
-bcdedit /dbgsettings net hostip:<HOST_IP> port:<PORT> key:<KEY>
-```
-
-When `write_state=true`, it writes a host-side JSON file such as:
-
-```json
-{
-  "schema": "winrm-kd-session-v1",
-  "guest_host": "192.168.122.50",
-  "host_ip": "192.168.122.1",
-  "port": 50000,
-  "key": "1.2.3.4",
-  "created_by": "winrm-mcp"
-}
-```
-
-`kd-mcp` uses this file with `start_from_state`.
-
-## Security notes
-
-This project is meant for lab VMs and controlled debugging networks.
-
-Avoid exposing WinRM to untrusted networks. Prefer:
-
-- WinRM over HTTPS.
-- NTLM/Kerberos/CredSSP only where appropriate.
-- Password via environment variable or a secret manager.
-- Tight firewall rules.
-- Non-empty `allowed_command_prefixes` for shared environments.
-- Review of all commands before execution.
-
-## Troubleshooting
-
-### WinRM connection fails
-
-Check from the host:
+Verify from the host:
 
 ```powershell
 Test-WSMan <guest-ip>
 ```
 
-### Access denied
+## Security Notes
 
-Use an Administrator account on the guest and verify UAC/remote admin policy.
-
-### KD does not connect after reboot
-
-Run `query_debug_settings`, confirm `host_ip`, `port`, and `key`, and verify that `kd-mcp` uses the same state file.
+- Prefer HTTPS outside lab environments.
+- Store passwords in WINRM_PASSWORD.
+- Restrict firewall access.
+- Review commands before execution.
