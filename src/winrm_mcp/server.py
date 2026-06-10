@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import os
 import re
+import tempfile
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -35,7 +37,7 @@ class GuestConfig(BaseModel):
 
 class LimitsConfig(BaseModel):
     max_stdout_chars: int = 200000
-    copy_chunk_bytes: int = 49152
+    copy_chunk_bytes: int = 2048
     command_timeout_sec: int = 300
 
 
@@ -206,7 +208,7 @@ def session_run(shell_id: str, command: str, shell: str = "powershell") -> dict[
         res["cwd"] = st.cwd
         return res
     if shell.lower() == "cmd":
-        safe_cwd = st.cwd.replace('\"', '')
+        safe_cwd = st.cwd.replace('\\"', '')
         res = run_cmd(f'cd /d "{safe_cwd}" && {command} && cd')
         lines = res.get("stdout", "").splitlines()
         if lines:
@@ -226,8 +228,23 @@ def close_shell(shell_id: str) -> dict[str, Any]:
     return {"closed": existed}
 
 
+def _sha256_local(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for block in iter(lambda: f.read(65536), b""):
+            h.update(block)
+    return h.hexdigest().lower()
+
+
+def _sha256_remote(remote_path: str) -> tuple[bool, str]:
+    r = _run_ps_raw(f"(Get-FileHash -LiteralPath {_ps_quote(remote_path)} -Algorithm SHA256).Hash.ToLower()")
+    if not r["ok"]:
+        return False, ""
+    return True, r["stdout"].strip().splitlines()[-1].strip().lower()
+
+
 @mcp.tool()
-def copy_to_guest(local_path: str, remote_path: str, overwrite: bool = True) -> dict[str, Any]:
+def copy_to_guest(local_path: str, remote_path: str, overwrite: bool = True, verify_hash: bool = True) -> dict[str, Any]:
     """Copy a file from the host running this MCP server to the Windows guest."""
     src = Path(local_path)
     if not src.is_file():
@@ -235,12 +252,17 @@ def copy_to_guest(local_path: str, remote_path: str, overwrite: bool = True) -> 
     cfg = _load_config()
     total = src.stat().st_size
     remote_parent = str(PureWindowsPath(remote_path).parent)
-    init = f"New-Item -ItemType Directory -Force -Path {_ps_quote(remote_parent)} | Out-Null; "
-    init += f"if ((Test-Path -LiteralPath {_ps_quote(remote_path)}) -and -not ${str(overwrite).lower()}) {{ throw 'Remote file exists' }}; "
-    init += f"Remove-Item -LiteralPath {_ps_quote(remote_path)} -Force -ErrorAction SilentlyContinue"
+
+    # prepare: mkdir + remove existing
+    init = (
+        f"New-Item -ItemType Directory -Force -Path {_ps_quote(remote_parent)} | Out-Null; "
+        f"Remove-Item -LiteralPath {_ps_quote(remote_path)} -Force -ErrorAction SilentlyContinue; "
+        f"[IO.File]::WriteAllBytes({_ps_quote(remote_path)}, [byte[]]@()); 'ok'"
+    )
     r = _run_ps_raw(init)
     if not r["ok"]:
         return r
+
     chunks = 0
     with src.open("rb") as f:
         while True:
@@ -248,14 +270,48 @@ def copy_to_guest(local_path: str, remote_path: str, overwrite: bool = True) -> 
             if not data:
                 break
             b64 = base64.b64encode(data).decode("ascii")
-            ps = f"$b=[Convert]::FromBase64String({_ps_quote(b64)}); [IO.File]::Open({_ps_quote(remote_path)}, [IO.FileMode]::Append, [IO.FileAccess]::Write).Dispose(); [IO.File]::WriteAllBytes($env:TEMP+'\\mcp_chunk.bin',$b); $fs=[IO.File]::Open({_ps_quote(remote_path)},[IO.FileMode]::Append,[IO.FileAccess]::Write); $fs.Write($b,0,$b.Length); $fs.Close()"
+            ps = (
+                f"$b=[Convert]::FromBase64String({_ps_quote(b64)}); "
+                f"$retries=5; $ok=$false; while($retries-- -gt 0 -and -not $ok){{"
+                f"try{{$fs=[IO.File]::Open({_ps_quote(remote_path)},[IO.FileMode]::Append,[IO.FileAccess]::Write,[IO.FileShare]::Read); "
+                f"$fs.Write($b,0,$b.Length); $fs.Close(); $ok=$true}}"
+                f"catch{{Start-Sleep -Milliseconds 300}}}}"
+                f"; if(-not $ok){{throw 'chunk write failed after retries'}}"
+            )
             rr = _run_ps_raw(ps)
             if not rr["ok"]:
                 rr["chunks_completed"] = chunks
                 return rr
             chunks += 1
-    verify = _run_ps_raw(f"(Get-Item -LiteralPath {_ps_quote(remote_path)}).Length")
-    return {"ok": verify["ok"], "local_path": local_path, "remote_path": remote_path, "bytes": total, "chunks": chunks, "remote_size_stdout": verify.get("stdout", "")}
+
+    result: dict[str, Any] = {"ok": True, "local_path": local_path, "remote_path": remote_path, "bytes": total, "chunks": chunks}
+
+    if verify_hash:
+        local_hash = _sha256_local(src)
+        ok, remote_hash = _sha256_remote(remote_path)
+        result["hash_ok"] = ok and (local_hash == remote_hash)
+        result["local_sha256"] = local_hash
+        result["remote_sha256"] = remote_hash if ok else "error"
+        if not result["hash_ok"]:
+            result["ok"] = False
+
+    return result
+
+
+@mcp.tool()
+def test_file_copy() -> dict[str, Any]:
+    """Smoke-test copy_to_guest: write a 32 KB temp file, copy to guest, verify SHA256, then clean up."""
+    data = bytes(range(256)) * 128  # 32 KB with known pattern
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".bin") as tf:
+        tf.write(data)
+        tmp_local = tf.name
+    remote_tmp = r"C:\Windows\Temp\winrm_mcp_test.bin"
+    try:
+        res = copy_to_guest(tmp_local, remote_tmp, overwrite=True, verify_hash=True)
+    finally:
+        Path(tmp_local).unlink(missing_ok=True)
+        _run_ps_raw(f"Remove-Item -LiteralPath {_ps_quote(remote_tmp)} -Force -ErrorAction SilentlyContinue")
+    return {"ok": res.get("ok", False), "hash_ok": res.get("hash_ok", False), "bytes": res.get("bytes"), "chunks": res.get("chunks"), "detail": res}
 
 
 @mcp.tool()
