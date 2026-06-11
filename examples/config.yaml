@@ -17,6 +17,8 @@ guest:
 
 limits:
   max_stdout_chars: 200000
+  # Legacy compatibility field. The simplified backend uses Copy-Item/Invoke-Command
+  # instead of manual chunked transfers, so this value is no longer used.
   copy_chunk_bytes: 2048
   command_timeout_sec: 300
 
