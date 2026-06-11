@@ -20,6 +20,18 @@ limits:
   copy_chunk_bytes: 2048
   command_timeout_sec: 300
 
+recovery:
+  reconnect_timeout_sec: 300
+  reconnect_interval_sec: 5
+  reconnect_settle_sec: 10
+  reboot_offline_timeout_sec: 60
+
+analysis:
+  sysinternals_dir: "C:\\Users\\Administrator\\Desktop\\SysinternalsSuite"
+  litecov_path: "C:\\Users\\Administrator\\Desktop\\covcheck\\litecov.exe"
+  coverage_file: "C:\\Users\\Administrator\\Desktop\\covcheck\\sym_cov.txt"
+  build_files_dir: "C:\\Users\\Administrator\\Desktop\\build_files"
+
 security:
   # Empty allowlist means allow all commands. For shared environments, add prefixes.
   allowed_command_prefixes: []

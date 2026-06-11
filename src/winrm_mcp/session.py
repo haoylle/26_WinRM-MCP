@@ -14,18 +14,22 @@ def endpoint(cfg: Config | None = None) -> str:
     return f"{cfg.guest.scheme}://{cfg.guest.host}:{cfg.guest.port}{cfg.guest.path}"
 
 
+def build_session(cfg: Config | None = None) -> winrm.Session:
+    cfg = cfg or load_config()
+    return winrm.Session(
+        endpoint(cfg),
+        auth=(cfg.guest.username, cfg.guest.password),
+        transport=cfg.guest.transport,
+        server_cert_validation=cfg.guest.server_cert_validation,
+        operation_timeout_sec=cfg.guest.operation_timeout_sec,
+        read_timeout_sec=cfg.guest.read_timeout_sec,
+    )
+
+
 def get_session() -> winrm.Session:
     global _session_cache
-    cfg = load_config()
     if _session_cache is None:
-        _session_cache = winrm.Session(
-            endpoint(cfg),
-            auth=(cfg.guest.username, cfg.guest.password),
-            transport=cfg.guest.transport,
-            server_cert_validation=cfg.guest.server_cert_validation,
-            operation_timeout_sec=cfg.guest.operation_timeout_sec,
-            read_timeout_sec=cfg.guest.read_timeout_sec,
-        )
+        _session_cache = build_session()
     return _session_cache
 
 

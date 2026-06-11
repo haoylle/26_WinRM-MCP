@@ -27,6 +27,20 @@ class LimitsConfig(BaseModel):
     command_timeout_sec: int = 300
 
 
+class RecoveryConfig(BaseModel):
+    reconnect_timeout_sec: float = 300.0
+    reconnect_interval_sec: float = 5.0
+    reconnect_settle_sec: float = 10.0
+    reboot_offline_timeout_sec: float = 60.0
+
+
+class AnalysisToolsConfig(BaseModel):
+    sysinternals_dir: str | None = None
+    litecov_path: str | None = None
+    coverage_file: str = r"C:\Users\Administrator\Desktop\covcheck\sym_cov.txt"
+    build_files_dir: str = r"C:\Users\Administrator\Desktop\build_files"
+
+
 class SecurityConfig(BaseModel):
     allowed_command_prefixes: list[str] = Field(default_factory=list)
     denied_patterns: list[str] = Field(default_factory=list)
@@ -43,6 +57,8 @@ class KdnetConfig(BaseModel):
 class Config(BaseModel):
     guest: GuestConfig
     limits: LimitsConfig = Field(default_factory=LimitsConfig)
+    recovery: RecoveryConfig = Field(default_factory=RecoveryConfig)
+    analysis: AnalysisToolsConfig = Field(default_factory=AnalysisToolsConfig)
     security: SecurityConfig = Field(default_factory=SecurityConfig)
     kdnet: KdnetConfig | None = None
 

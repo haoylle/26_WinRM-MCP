@@ -16,6 +16,10 @@
 - 파일 복사 검증용 `test_file_copy()` 도구
 - 게스트에서 실행 파일 또는 스크립트 실행
 - 현재 디렉터리를 유지하는 논리 쉘 세션
+- Sysinternals 기반 분석 편의 도구
+- litecov 실행 및 attach helper
+- coverage 파일 다운로드 helper
+- build 파일 업로드 helper
 - 게스트 VM 재부팅
 - KDNET 설정 자동화
 - KD-MCP와 연동하기 위한 상태 파일 생성
@@ -101,7 +105,7 @@ Copy-Item .\examples\config.yaml .\config.yaml
 
 ## Configuration
 
-`config.yaml`은 WinRM 연결 정보, 출력 제한, 파일 복사 청크 크기, KDNET 설정을 포함합니다.
+`config.yaml`은 WinRM 연결 정보, 출력 제한, 파일 복사 청크 크기, 재연결 대기 정책, 분석 도구 경로, KDNET 설정을 포함합니다.
 
 예시는 다음과 같습니다.
 
@@ -124,6 +128,18 @@ limits:
   copy_chunk_bytes: 2048
   command_timeout_sec: 300
 
+recovery:
+  reconnect_timeout_sec: 300
+  reconnect_interval_sec: 5
+  reconnect_settle_sec: 10
+  reboot_offline_timeout_sec: 60
+
+analysis:
+  sysinternals_dir: "C:\\Users\\Administrator\\Desktop\\SysinternalsSuite"
+  litecov_path: "C:\\Users\\Administrator\\Desktop\\covcheck\\litecov.exe"
+  coverage_file: "C:\\Users\\Administrator\\Desktop\\covcheck\\sym_cov.txt"
+  build_files_dir: "C:\\Users\\Administrator\\Desktop\\build_files"
+
 kdnet:
   host_ip: "192.168.122.1"
   port: 50000
@@ -135,6 +151,20 @@ kdnet:
 `server.py`의 기본 `copy_chunk_bytes` 값은 8192입니다. 하지만 `config.yaml`에 값이 있으면 설정 파일 값이 우선 적용됩니다.
 
 파일 복사가 불안정하거나 `The command line is too long` 오류가 발생하면 2048 또는 1024처럼 작은 값으로 낮추는 것이 좋습니다.
+
+`recovery` 설정은 재부팅 또는 KD break 해제 후 WinRM이 다시 살아날 때까지 얼마나 기다릴지 결정합니다.
+
+- `reconnect_timeout_sec`: WinRM 재연결 최대 대기 시간
+- `reconnect_interval_sec`: 재시도 간격
+- `reconnect_settle_sec`: 연결 직후 추가 안정화 대기 시간
+- `reboot_offline_timeout_sec`: 재부팅 후 WinRM down 상태를 관찰하는 최대 시간
+
+`analysis` 설정은 기존 분석 환경에서 쓰던 Sysinternals/litecov helper가 사용할 guest 경로를 정의합니다.
+
+- `sysinternals_dir`: `pslist.exe`, `Listdlls.exe`, `PsInfo.exe`가 있는 디렉터리
+- `litecov_path`: guest에서 실행할 `litecov.exe` 경로
+- `coverage_file`: `download_coverage`가 가져올 guest coverage 파일
+- `build_files_dir`: `upload_build_file`가 업로드할 guest 디렉터리
 
 비밀번호는 `config.yaml`에 직접 저장하는 것보다 환경 변수로 지정하는 방식을 권장합니다.
 
@@ -298,11 +328,54 @@ MCP 요청/응답 방식에 맞춘 논리 쉘 세션을 제공합니다.
 
 `wait=true`이면 프로세스 종료까지 기다리고, 가능한 경우 ExitCode를 반환합니다.
 
+### get_processes / get_dlls / get_system_info / run_sysinternals
+
+Sysinternals 기반 분석 보조 도구입니다.
+
+`analysis.sysinternals_dir`가 설정되어 있어야 합니다.
+
+### find_processes_by_dll / list_dlls_of_process / check_process / is_litecov_running / file_exists
+
+분석 중 자주 필요한 helper입니다.
+
+- `find_processes_by_dll`: 특정 DLL을 로드한 프로세스 찾기
+- `list_dlls_of_process`: 특정 프로세스의 DLL 목록 조회
+- `check_process`: 프로세스 존재 여부와 PID 확인
+- `is_litecov_running`: litecov 실행 여부 확인
+- `file_exists`: guest 경로 존재 여부와 기본 metadata 확인
+
+### litecov_spawn / litecov_attach
+
+`litecov.exe`를 새 프로세스로 실행하거나 기존 PID에 attach합니다.
+
+`analysis.litecov_path`가 설정되어 있어야 합니다.
+
+### download_coverage / upload_build_file
+
+분석 산출물 전송 helper입니다.
+
+- `download_coverage`: `analysis.coverage_file`을 호스트로 다운로드
+- `upload_build_file`: 로컬 빌드 파일을 guest의 `analysis.build_files_dir` 아래에 unique name으로 업로드
+
 ### reboot
 
 게스트 VM을 WinRM을 통해 재부팅합니다.
 
 재부팅 후에는 WinRM 연결이 잠시 끊길 수 있습니다.
+
+단순히 재부팅 요청만 보내므로, 실제로 부팅이 끝날 때까지 기다리려면 `reboot_and_wait`를 사용하는 것이 좋습니다.
+
+### wait_for_winrm
+
+게스트가 재부팅 중이거나 KD break에서 복귀한 뒤 WinRM이 다시 응답할 때까지 polling합니다.
+
+각 시도마다 새 WinRM 세션을 만들어 stale connection을 재사용하지 않습니다.
+
+### reboot_and_wait
+
+게스트에 재부팅을 요청한 뒤 WinRM이 한 번 끊기는지 관찰하고, 부팅 후 다시 응답할 때까지 기다립니다.
+
+재부팅 중 연결이 끊겨 예외가 발생해도 expected disconnect로 처리하고 재접속 단계로 넘어갑니다.
 
 ### query_debug_settings
 
@@ -322,9 +395,11 @@ WinRM-MCP와 KD-MCP를 함께 사용할 때의 일반적인 순서는 다음과 
 
 ```text
 1. winrm-mcp: configure_kdnet
-2. winrm-mcp: reboot
+2. winrm-mcp: reboot_and_wait
 3. kd-mcp: start_from_state
 4. kd-mcp: kd_command
+5. KD가 break 상태면 kd-mcp: resume_for_winrm
+6. winrm-mcp: wait_for_winrm
 ```
 
 두 레포지토리는 동일한 `state_file`, `port`, `key` 값을 사용해야 합니다.
@@ -340,6 +415,8 @@ Test-WSMan <guest-ip>
 ```
 
 게스트 네트워크가 Public이면 방화벽 예외가 적용되지 않을 수 있습니다.
+
+게스트가 재부팅 중이거나 KD break에서 막 풀린 직후라면 `wait_for_winrm` 또는 `reboot_and_wait`를 먼저 호출하는 편이 낫습니다.
 
 ### File hash mismatch
 
