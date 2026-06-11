@@ -28,7 +28,7 @@ WinRM-MCP는 호스트 Windows에서 실행되고, 게스트 Windows는 WinRM �
 
 ```text
 Host Windows
-  ├─ Codex / MCP Client
+  ├─ Claude Code / Codex CLI / MCP Client
   ├─ winrm-mcp
   ├─ kd-mcp
   └─ kd.exe / WinDbg
@@ -47,7 +47,7 @@ Guest Windows VM
 
 - Windows 10/11 또는 Windows Server
 - Python 3.10 이상
-- MCP Client 또는 Codex
+- Claude Code, Codex CLI 또는 MCP Client
 - 게스트 WinRM 엔드포인트에 접근 가능한 네트워크 연결
 
 게스트에는 다음이 필요합니다.
@@ -134,18 +134,43 @@ kdnet:
 
 `server.py`의 기본 `copy_chunk_bytes` 값은 8192입니다. 하지만 `config.yaml`에 값이 있으면 설정 파일 값이 우선 적용됩니다.
 
-파일 복사가 불안정하면 2048처럼 작은 값으로 낮추는 것이 좋습니다. 반대로 전송이 안정적이면 8192 이상으로 올려 청크 수를 줄일 수 있습니다.
+파일 복사가 불안정하거나 `The command line is too long` 오류가 발생하면 2048 또는 1024처럼 작은 값으로 낮추는 것이 좋습니다.
 
 비밀번호는 `config.yaml`에 직접 저장하는 것보다 환경 변수로 지정하는 방식을 권장합니다.
 
 ```powershell
 $env:WINRM_PASSWORD = "guest-admin-password"
-$env:WINRM_MCP_CONFIG = "C:\\path\\to\\26_WinRM-MCP\\config.yaml"
+$env:WINRM_MCP_CONFIG = "C:\\tools\\26_WinRM-MCP\\config.yaml"
 ```
 
-## MCP Client Configuration
+## MCP Client Setup
 
-MCP Client 설정 예시는 다음과 같습니다.
+이 MCP 서버는 stdio 기반 로컬 MCP 서버로 실행됩니다.
+
+아래 예시는 레포지토리를 `C:\tools\26_WinRM-MCP`에 설치했다고 가정합니다. 실제 경로에 맞게 수정해야 합니다.
+
+### Claude Code
+
+Claude Code에서 프로젝트 단위로 등록하려면 프로젝트 루트에서 다음 명령을 실행합니다.
+
+```powershell
+claude mcp add winrm `
+  --env WINRM_MCP_CONFIG="C:\tools\26_WinRM-MCP\config.yaml" `
+  --env WINRM_PASSWORD="guest-admin-password" `
+  -- "C:\tools\26_WinRM-MCP\.venv\Scripts\winrm-mcp.exe"
+```
+
+사용자 전체 설정으로 등록하고 싶다면 Claude Code의 MCP scope 옵션을 사용하여 user scope로 추가합니다.
+
+```powershell
+claude mcp add winrm `
+  --scope user `
+  --env WINRM_MCP_CONFIG="C:\tools\26_WinRM-MCP\config.yaml" `
+  --env WINRM_PASSWORD="guest-admin-password" `
+  -- "C:\tools\26_WinRM-MCP\.venv\Scripts\winrm-mcp.exe"
+```
+
+수동으로 `.mcp.json`을 사용하는 경우에는 다음처럼 작성할 수 있습니다.
 
 ```json
 {
@@ -154,14 +179,46 @@ MCP Client 설정 예시는 다음과 같습니다.
       "command": "C:\\tools\\26_WinRM-MCP\\.venv\\Scripts\\winrm-mcp.exe",
       "env": {
         "WINRM_MCP_CONFIG": "C:\\tools\\26_WinRM-MCP\\config.yaml",
-        "WINRM_PASSWORD": "replace-with-guest-admin-password"
+        "WINRM_PASSWORD": "guest-admin-password"
       }
     }
   }
 }
 ```
 
-Codex를 호스트에서 실행한다면, 위 MCP 서버도 호스트에서 실행되도록 설정해야 합니다.
+등록 후 Claude Code를 다시 시작하거나 MCP 서버 목록을 갱신한 뒤 `winrm.health_check`를 호출해 연결을 확인합니다.
+
+### Codex CLI
+
+Codex CLI에서는 사용자 설정 파일에 MCP 서버를 추가합니다.
+
+Windows 기준 설정 파일 위치 예시는 다음과 같습니다.
+
+```text
+%USERPROFILE%\.codex\config.toml
+```
+
+다음 항목을 추가합니다.
+
+```toml
+[mcp_servers.winrm]
+command = "C:\\tools\\26_WinRM-MCP\\.venv\\Scripts\\winrm-mcp.exe"
+env = { WINRM_MCP_CONFIG = "C:\\tools\\26_WinRM-MCP\\config.yaml", WINRM_PASSWORD = "guest-admin-password" }
+```
+
+Codex CLI를 다시 시작한 뒤 MCP tool 목록에서 `winrm` 서버가 보이는지 확인합니다.
+
+WinRM 연결 확인은 다음 tool을 먼저 호출하는 방식으로 진행합니다.
+
+```text
+winrm.health_check
+```
+
+### Using WinRM-MCP and KD-MCP Together
+
+WinRM-MCP와 KD-MCP를 둘 다 사용하는 경우 Claude Code 또는 Codex CLI에 두 MCP 서버를 모두 등록해야 합니다.
+
+WinRM-MCP는 게스트 파일 복사, 명령 실행, KDNET 설정을 담당하고 KD-MCP는 `kd.exe` 연결과 커널 디버거 명령 실행을 담당합니다.
 
 ## Tools
 
